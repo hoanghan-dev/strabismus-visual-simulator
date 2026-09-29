@@ -154,7 +154,15 @@ export class SimulationEngine {
     const lerp = 0.14;
     this.currentDeviation += (this.params.deviation - this.currentDeviation) * lerp;
     this.currentDiplopiaOffset += (this.params.diplopiaOffset - this.currentDiplopiaOffset) * lerp;
-    this.currentSuppression += (this.params.suppression - this.currentSuppression) * lerp;
+
+    // Determine target suppression: Stage-level default, or optional Brain Response override
+    let targetSuppression = this.params.suppression;
+    if (this.params.brainResponseMode === 'suppression') {
+      targetSuppression = 95;
+    } else if (this.params.brainResponseMode === 'diplopia') {
+      targetSuppression = 0;
+    }
+    this.currentSuppression += (targetSuppression - this.currentSuppression) * lerp;
     this.currentFusion += (this.params.fusion - this.currentFusion) * lerp;
     this.currentBlur += (this.params.blurAmount - this.currentBlur) * lerp;
 
@@ -208,9 +216,29 @@ export class SimulationEngine {
     this.compositeSimulation(ctx, cw, ch, marginX, marginY, timestamp);
     ctx.restore();
 
+    // Visual Confusion Overlay (Section 8 & 17 of Research Paper)
+    if (this.params.visualConfusionEnabled && (this.params.condition === 'diplopia' || this.currentDiplopiaOffset > 10)) {
+      this.drawVisualConfusionOverlay(ctx, cw, ch, marginX, marginY);
+    }
+
+    // Cortical Suppression Scotoma Overlay (Section 9 & 18 of Research Paper)
+    if (this.params.showSuppressionScotoma && this.params.condition === 'suppression') {
+      this.drawSuppressionScotomaOverlay(ctx, cw, ch);
+    }
+
+    // Crowding Phenomenon Optotype Overlay (Section 11 & 18 of Research Paper)
+    if (this.params.showCrowdingTest && this.params.condition === 'amblyopia') {
+      this.drawCrowdingOptotypeOverlay(ctx, cw, ch, timestamp);
+    }
+
     // Optional Hirschberg corneal reflex guide
     if (this.params.showHirschbergOverlay || this.params.condition === 'hirschberg') {
       this.drawHirschbergOverlay(ctx, cw, ch);
+
+      // Project corneal light reflexes directly onto live user face if webcam is active!
+      if (hasLiveVideo && this.lastFaceResult.detected && this.lastFaceResult.box) {
+        this.drawFaceCornealGlints(ctx, cw, ch, this.lastFaceResult.box, this.params.mirrored);
+      }
     }
 
     // Draw face detection bounding box if enabled & detected
@@ -469,6 +497,68 @@ export class SimulationEngine {
       return;
     }
 
+    // ==================== FIRST-PERSON BINOCULAR EYE OCCLUSION ====================
+    // When one eye is covered by the user, only the open eye's channel is perceived.
+    // The covered eye's channel is completely suppressed (0% visible).
+    // The open eye preserves its existing channel transform without second-image conflict.
+    if (this.params.eyeOcclusionMode && this.params.eyeOcclusionMode !== 'both') {
+      const isLeftCovered = this.params.eyeOcclusionMode === 'left_covered';
+      const isRightCovered = this.params.eyeOcclusionMode === 'right_covered';
+
+      // Dynamic mapping based on effectiveDeviatingEye:
+      // If effectiveDeviatingEye === 'right':
+      //   Fixating (Channel 1) = Left Eye, Deviating (Channel 2) = Right Eye
+      // If effectiveDeviatingEye === 'left':
+      //   Fixating (Channel 1) = Right Eye, Deviating (Channel 2) = Left Eye
+      let openChannelSrcX = marginX;
+      let openChannelSrcY = marginY;
+      let isOpenEyeAmblyopic = false;
+
+      if (isLeftCovered) {
+        // Left Eye covered -> Render ONLY Right Eye channel
+        if (effectiveDeviatingEye === 'right') {
+          // Right Eye is Deviating (Channel 2)
+          openChannelSrcX = marginX - halfShiftX;
+          openChannelSrcY = marginY - halfShiftY;
+          isOpenEyeAmblyopic = this.params.condition === 'amblyopia';
+        } else {
+          // Right Eye is Fixating (Channel 1)
+          openChannelSrcX = marginX + halfShiftX;
+          openChannelSrcY = marginY + halfShiftY;
+        }
+      } else if (isRightCovered) {
+        // Right Eye covered -> Render ONLY Left Eye channel
+        if (effectiveDeviatingEye === 'left') {
+          // Left Eye is Deviating (Channel 2)
+          openChannelSrcX = marginX - halfShiftX;
+          openChannelSrcY = marginY - halfShiftY;
+          isOpenEyeAmblyopic = this.params.condition === 'amblyopia';
+        } else {
+          // Left Eye is Fixating (Channel 1)
+          openChannelSrcX = marginX + halfShiftX;
+          openChannelSrcY = marginY + halfShiftY;
+        }
+      }
+
+      ctx.save();
+      if (isOpenEyeAmblyopic) {
+        // Mắt nhược thị buộc phải làm việc độc lập khi che mắt lành:
+        // 1. Mờ nhòe không thể bù trừ hoàn toàn bằng kính (blur)
+        // 2. Giảm độ nhạy tương phản: nhạt màu, phẳng (contrast 62%, saturate 68%)
+        // 3. Vi rung định thị & cảm giác không gian thiếu ổn định (micro-jitter)
+        const microJitterX = Math.sin(timestamp * 0.007) * 2.2;
+        const microJitterY = Math.cos(timestamp * 0.005) * 1.5;
+        const blurLevel = Math.max(3.8, this.currentBlur).toFixed(1);
+        ctx.filter = `blur(${blurLevel}px) contrast(62%) saturate(68%) brightness(97%)`;
+        ctx.drawImage(this.offscreenCanvas, openChannelSrcX + microJitterX, openChannelSrcY + microJitterY, cw, ch, 0, 0, cw, ch);
+      } else {
+        // Mắt lành làm việc độc lập khi che mắt nhược thị: Hình ảnh sắc nét, tương phản chuẩn
+        ctx.drawImage(this.offscreenCanvas, openChannelSrcX, openChannelSrcY, cw, ch, 0, 0, cw, ch);
+      }
+      ctx.restore();
+      return;
+    }
+
     // ==================== STAGE 2: EARLY STRABISMUS / PHORIA (KHÔNG SONG THỊ) ====================
     if (this.params.condition === 'early_strabismus') {
       // In early strabismus (heterophoria), motor fusion is actively compensating.
@@ -495,13 +585,11 @@ export class SimulationEngine {
 
     // ==================== STAGE 6: AMBLYOPIA (NHƯỢC THỊ DO LÁC) ====================
     if (this.params.condition === 'amblyopia') {
+      // Khi mở cả hai mắt: Não tự động ưu tiên lấy dữ liệu từ mắt khỏe,
+      // người bệnh sinh hoạt gần như bình thường và nhiều khi không nhận ra một mắt đang nhìn rất kém.
+      // Hình ảnh sắc nét từ mắt lành, không còn song thị do mắt lệch bị ức chế, nhưng mất thị giác 3D.
       ctx.save();
       ctx.drawImage(this.offscreenCanvas, marginX, marginY, cw, ch, 0, 0, cw, ch);
-      if (this.currentBlur > 0.5) {
-        ctx.filter = `blur(${this.currentBlur.toFixed(1)}px) contrast(75%)`;
-        ctx.globalAlpha = 0.45;
-        ctx.drawImage(this.offscreenCanvas, marginX, marginY, cw, ch, 0, 0, cw, ch);
-      }
       ctx.restore();
       return;
     }
@@ -721,53 +809,101 @@ export class SimulationEngine {
     const rightEyeX = cardX + cardW * 0.5 + eyeSpacing;
     const irisR = 28;
     const pupilR = 12;
-
-    // Draw Left Eye (OS)
-    this.drawCornealEye(ctx, leftEyeX, eyeCenterY, irisR, pupilR, 'Mắt Trái (OS)', 0, 0, false);
-
-    // Draw Right Eye (OD - Deviating)
-    let glintOffsetX = 0;
-    let glintOffsetY = 0;
     const mmToPixel = (pupilR * 2) / 4; // 4mm pupil diameter corresponds to pupilR*2
 
-    if (this.params.direction === 'esotropia') {
-      // Lác trong: Phản xạ dời ra THÁI DƯƠNG (Temporal = sang phải trên mắt phải)
-      glintOffsetX = reflexMm * mmToPixel;
-      glintOffsetY = 0;
-    } else if (this.params.direction === 'exotropia') {
-      // Lác ngoài: Phản xạ dời vào MŨI (Nasal = sang trái trên mắt phải)
-      glintOffsetX = -reflexMm * mmToPixel;
-      glintOffsetY = 0;
-    } else if (this.params.direction === 'hypertropia') {
-      // Lác đứng trên: Phản xạ dời XUỐNG DƯỚI (Inferior)
-      glintOffsetX = 0;
-      glintOffsetY = reflexMm * mmToPixel;
-    } else {
-      // Lác đứng dưới (Hypotropia): Phản xạ dời LÊN TRÊN (Superior)
-      glintOffsetX = 0;
-      glintOffsetY = -reflexMm * mmToPixel;
+    // Determine which eye is deviating based on patient's condition & parameters
+    let effectiveDeviatingEye: 'left' | 'right' = 'right';
+    if (this.params.deviatingEye === 'left') {
+      effectiveDeviatingEye = 'left';
+    } else if (this.params.deviatingEye === 'right') {
+      effectiveDeviatingEye = 'right';
+    } else if (this.params.deviatingEye === 'alternating') {
+      // Alternate fixation every 3.5 seconds
+      const phase = Math.floor(Date.now() / 3500) % 2;
+      effectiveDeviatingEye = phase === 0 ? 'right' : 'left';
     }
 
-    const dirLabel =
-      this.params.direction === 'esotropia'
-        ? 'Lệch Thái Dương'
-        : this.params.direction === 'exotropia'
-        ? 'Lệch Mũi'
-        : this.params.direction === 'hypertropia'
-        ? 'Lệch Dưới'
-        : 'Lệch Trên';
+    // Displacement vectors
+    let odGlintX = 0;
+    let odGlintY = 0;
+    let odDisplaced = false;
+    let odDetail: string | undefined = undefined;
 
+    let osGlintX = 0;
+    let osGlintY = 0;
+    let osDisplaced = false;
+    let osDetail: string | undefined = undefined;
+
+    // Optical Law of Purkinje I Corneal Reflex:
+    // Sống mũi (Nasal) nằm ở GIỮA 2 mắt (Bên TRÁI của Mắt Phải OD, Bên PHẢI của Mắt Trái OS).
+    // Thái dương (Temporal) nằm ở NGOÀI CÙNG (Bên PHẢI của Mắt Phải OD, Bên TRÁI của Mắt Trái OS).
+    // Khi mắt xoay về hướng nào, ánh phản xạ giác mạc Purkinje I sẽ dời về hướng NGƯỢC LẠI!
+    if (effectiveDeviatingEye === 'right' && reflexMm > 0.05) {
+      odDisplaced = true;
+      if (this.params.direction === 'esotropia') {
+        // Lác trong OD: Mắt xoay vào mũi (trái) -> Phản xạ dời ra THÁI DƯƠNG (phải, +x)
+        odGlintX = reflexMm * mmToPixel;
+        odDetail = `Thái Dương: +${reflexMm.toFixed(1)}mm`;
+      } else if (this.params.direction === 'exotropia') {
+        // Lác ngoài OD: Mắt xoay ra thái dương (phải) -> Phản xạ dời vào MŨI (trái, -x)
+        odGlintX = -reflexMm * mmToPixel;
+        odDetail = `Mũi: -${reflexMm.toFixed(1)}mm`;
+      } else if (this.params.direction === 'hypertropia') {
+        // Lác đứng trên OD: Mắt xoay lên trên -> Phản xạ dời XUỐNG DƯỚI (+y)
+        odGlintY = reflexMm * mmToPixel;
+        odDetail = `Dưới: +${reflexMm.toFixed(1)}mm`;
+      } else {
+        // Lác đứng dưới OD: Mắt xoay xuống dưới -> Phản xạ dời LÊN TRÊN (-y)
+        odGlintY = -reflexMm * mmToPixel;
+        odDetail = `Trên: -${reflexMm.toFixed(1)}mm`;
+      }
+    } else if (effectiveDeviatingEye === 'left' && reflexMm > 0.05) {
+      osDisplaced = true;
+      if (this.params.direction === 'esotropia') {
+        // Lác trong OS: Mắt xoay vào mũi (phải) -> Phản xạ dời ra THÁI DƯƠNG (trái, -x)
+        osGlintX = -reflexMm * mmToPixel;
+        osDetail = `Thái Dương: -${reflexMm.toFixed(1)}mm`;
+      } else if (this.params.direction === 'exotropia') {
+        // Lác ngoài OS: Mắt xoay ra thái dương (trái) -> Phản xạ dời vào MŨI (phải, +x)
+        osGlintX = reflexMm * mmToPixel;
+        osDetail = `Mũi: +${reflexMm.toFixed(1)}mm`;
+      } else if (this.params.direction === 'hypertropia') {
+        // Lác đứng trên OS: Mắt xoay lên trên -> Phản xạ dời XUỐNG DƯỚI (+y)
+        osGlintY = reflexMm * mmToPixel;
+        osDetail = `Dưới: +${reflexMm.toFixed(1)}mm`;
+      } else {
+        // Lác đứng dưới OS: Mắt xoay xuống dưới -> Phản xạ dời LÊN TRÊN (-y)
+        osGlintY = -reflexMm * mmToPixel;
+        osDetail = `Trên: -${reflexMm.toFixed(1)}mm`;
+      }
+    }
+
+    // Draw Left Eye (OS)
+    this.drawCornealEye(
+      ctx,
+      leftEyeX,
+      eyeCenterY,
+      irisR,
+      pupilR,
+      effectiveDeviatingEye === 'left' ? 'Mắt Trái (OS - LỆCH TRỤC)' : 'Mắt Trái (OS - THẲNG TRỤC)',
+      osGlintX,
+      osGlintY,
+      osDisplaced,
+      osDetail
+    );
+
+    // Draw Right Eye (OD)
     this.drawCornealEye(
       ctx,
       rightEyeX,
       eyeCenterY,
       irisR,
       pupilR,
-      'Mắt Phải (OD)',
-      glintOffsetX,
-      glintOffsetY,
-      reflexMm > 0.1,
-      `${dirLabel}: ${reflexMm.toFixed(1)}mm`
+      effectiveDeviatingEye === 'right' ? 'Mắt Phải (OD - LỆCH TRỤC)' : 'Mắt Phải (OD - THẲNG TRỤC)',
+      odGlintX,
+      odGlintY,
+      odDisplaced,
+      odDetail
     );
 
     // Center Penlight Coaxial Beam indicator
@@ -947,5 +1083,429 @@ export class SimulationEngine {
     ctx.stroke();
 
     ctx.restore();
+  }
+
+  /**
+   * Visual Confusion Overlay (Section 8 & 17 of Research Paper)
+   * Simulates the superimposition of two distinct real-world objects onto the same central foveal direction
+   */
+  private drawVisualConfusionOverlay(
+    ctx: CanvasRenderingContext2D,
+    cw: number,
+    ch: number,
+    marginX: number,
+    marginY: number
+  ) {
+    ctx.save();
+    const centerX = cw * 0.5;
+    const centerY = ch * 0.5;
+    const foveaRadius = Math.min(cw, ch) * 0.16;
+
+    // Displaced angle sample for deviating eye fovea
+    const shiftOffset = cw * 0.045 * (this.params.direction === 'exotropia' ? -1 : 1);
+    const deviatingFoveaSrcX = marginX + shiftOffset;
+    const deviatingFoveaSrcY = marginY;
+
+    // Clip to central circular fovea area
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, foveaRadius, 0, Math.PI * 2);
+    ctx.clip();
+
+    // Render deviating eye target overlaid onto center with 55% alpha
+    ctx.globalAlpha = 0.55;
+    ctx.drawImage(
+      this.offscreenCanvas,
+      deviatingFoveaSrcX,
+      deviatingFoveaSrcY,
+      cw,
+      ch,
+      0,
+      0,
+      cw,
+      ch
+    );
+    ctx.restore();
+
+    // Reticle for foveal visual confusion
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 1.8;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, foveaRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Crosshair ticks
+    ctx.beginPath();
+    ctx.moveTo(centerX - foveaRadius - 12, centerY);
+    ctx.lineTo(centerX - foveaRadius + 6, centerY);
+    ctx.moveTo(centerX + foveaRadius - 6, centerY);
+    ctx.lineTo(centerX + foveaRadius + 12, centerY);
+    ctx.moveTo(centerX, centerY - foveaRadius - 12);
+    ctx.lineTo(centerX, centerY - foveaRadius + 6);
+    ctx.moveTo(centerX, centerY + foveaRadius - 6);
+    ctx.lineTo(centerX, centerY + foveaRadius + 12);
+    ctx.stroke();
+
+    // Clinical HUD Pill Label above fovea
+    const badgeW = 340;
+    const badgeH = 26;
+    const badgeX = centerX - badgeW / 2;
+    const badgeY = centerY - foveaRadius - 38;
+
+    ctx.fillStyle = 'rgba(7, 25, 34, 0.92)';
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 13);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#fbbf24';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('⚡ NHẦM LẪN THỊ GIÁC: 2 VẬT ĐÈ LÊN 1 HOÀNG ĐIỂM', centerX, badgeY + 17);
+
+    ctx.restore();
+  }
+
+  /**
+   * Cortical Suppression Scotoma Overlay (Section 9 & 18 of Research Paper)
+   * Visualizes local GABAergic suppression scotomas (foveal & peripheral) without whole-screen blackout
+   */
+  private drawSuppressionScotomaOverlay(
+    ctx: CanvasRenderingContext2D,
+    cw: number,
+    ch: number
+  ) {
+    ctx.save();
+    const centerX = cw * 0.5;
+    const centerY = ch * 0.5;
+
+    // 1. Central Foveal Suppression Scotoma (Triệt tiêu Visual Confusion)
+    const foveaRadius = Math.min(cw, ch) * 0.14;
+    const foveaGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, foveaRadius);
+    foveaGrad.addColorStop(0, 'rgba(0, 196, 180, 0.28)');
+    foveaGrad.addColorStop(0.7, 'rgba(0, 168, 150, 0.14)');
+    foveaGrad.addColorStop(1, 'rgba(0, 168, 150, 0)');
+
+    ctx.fillStyle = foveaGrad;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, foveaRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(0, 196, 180, 0.5)';
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, foveaRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 2. Peripheral Suppression Scotoma (Triệt tiêu Song thị)
+    const periphOffset = cw * 0.05 * (this.params.direction === 'exotropia' ? -1 : 1);
+    const periphX = centerX + periphOffset;
+    const periphRadius = foveaRadius * 0.85;
+
+    const periphGrad = ctx.createRadialGradient(periphX, centerY, 0, periphX, centerY, periphRadius);
+    periphGrad.addColorStop(0, 'rgba(56, 189, 248, 0.22)');
+    periphGrad.addColorStop(0.7, 'rgba(56, 189, 248, 0.10)');
+    periphGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+
+    ctx.fillStyle = periphGrad;
+    ctx.beginPath();
+    ctx.arc(periphX, centerY, periphRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.arc(periphX, centerY, periphRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Informational Scientific HUD banner at top
+    const bannerW = Math.min(cw * 0.9, 520);
+    const bannerH = 30;
+    const bannerX = (cw - bannerW) / 2;
+    const bannerY = 16;
+
+    ctx.fillStyle = 'rgba(7, 25, 34, 0.94)';
+    ctx.strokeStyle = 'rgba(0, 196, 180, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(bannerX, bannerY, bannerW, bannerH, 15);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#00c4b4';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(
+      '🧠 ÁM ĐIỂM ỨC CHẾ GABAERGIC (V1): Dập tắt song thị · Ngoại vi & chuyển động (MT/V5) vẫn mở',
+      cw * 0.5,
+      bannerY + 19
+    );
+
+    ctx.restore();
+  }
+
+  /**
+   * Amblyopia Crowding Phenomenon Optotype Overlay (Section 11 & 18 of Research Paper)
+   * Proves the hallmark crowding effect: single letters readable vs crowded lines tangled
+   */
+  private drawCrowdingOptotypeOverlay(
+    ctx: CanvasRenderingContext2D,
+    cw: number,
+    ch: number,
+    timestamp: number
+  ) {
+    ctx.save();
+    const cardW = Math.min(cw * 0.9, 480);
+    const cardH = 110;
+    const cardX = (cw - cardW) / 2;
+    const cardY = ch * 0.16;
+
+    // Card background
+    ctx.fillStyle = 'rgba(6, 24, 34, 0.95)';
+    ctx.strokeStyle = 'rgba(0, 196, 180, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(cardX, cardY, cardW, cardH, 18);
+    ctx.fill();
+    ctx.stroke();
+
+    // Card title
+    ctx.fillStyle = '#38bdf8';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('KHẢO SÁT HIỆN TƯỢNG ĐÁM ĐÔNG (CROWDING PHENOMENON) Ở NHƯỢC THỊ', cardX + 18, cardY + 22);
+
+    const isAmblyopicActive = this.params.eyeOcclusionMode !== 'both';
+
+    // Section 1: Single letter
+    const s1X = cardX + 24;
+    const s1Y = cardY + 40;
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '10px sans-serif';
+    ctx.fillText('1. Chữ đơn độc (Dễ đọc):', s1X, s1Y + 14);
+
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 26px monospace';
+    ctx.fillText('E', s1X + 40, s1Y + 46);
+
+    // Divider
+    ctx.strokeStyle = 'rgba(14, 53, 70, 0.8)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cardX + 170, cardY + 36);
+    ctx.lineTo(cardX + 170, cardY + 98);
+    ctx.stroke();
+
+    // Section 2: Crowded horizontal row
+    const s2X = cardX + 185;
+    const s2Y = cardY + 40;
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(
+      isAmblyopicActive
+        ? '2. Hàng chữ chen chúc: Dính chùm, méo mó!'
+        : '2. Hàng chữ chen chúc (Mắt lành nhìn bình thường):',
+      s2X,
+      s2Y + 14
+    );
+
+    const letters = ['E', 'F', 'P', 'T', 'O', 'Z'];
+    ctx.font = 'bold 22px monospace';
+
+    letters.forEach((char, idx) => {
+      let charX = s2X + 16 + idx * 36;
+      const charY = s2Y + 46;
+
+      if (isAmblyopicActive) {
+        // Crowding distortion: letters drift, overlap, blur, and lose contrast
+        const drift = Math.sin(timestamp * 0.005 + idx * 1.5) * 4.2;
+        charX += drift - (idx > 2 ? 6 : 0);
+        ctx.fillStyle = idx % 2 === 0 ? 'rgba(248, 250, 252, 0.55)' : 'rgba(203, 213, 225, 0.45)';
+      } else {
+        ctx.fillStyle = '#f8fafc';
+      }
+      ctx.fillText(char, charX, charY);
+    });
+
+    ctx.restore();
+  }
+
+  /**
+   * Live Face Hirschberg Corneal Light Reflex (Purkinje I Specular Glint)
+   * Projects pinpoint coaxial reflections directly onto the user's detected pupils in camera view
+   */
+  private drawFaceCornealGlints(
+    ctx: CanvasRenderingContext2D,
+    cw: number,
+    ch: number,
+    box: { x: number; y: number; width: number; height: number },
+    mirrored: boolean
+  ) {
+    let bx = box.x * cw;
+    const by = box.y * ch;
+    const bw = box.width * cw;
+    const bh = box.height * ch;
+
+    if (mirrored) {
+      bx = cw - (bx + bw);
+    }
+
+    const eyeY = by + bh * 0.38;
+    const eye1X = bx + bw * 0.32; // Screen Left
+    const eye2X = bx + bw * 0.68; // Screen Right
+
+    // Identify user's anatomical eyes:
+    // In mirrored mode (standard selfie webcam): Screen Left is user's Right Eye (OD), Screen Right is user's Left Eye (OS).
+    // In unmirrored mode: Screen Left is user's Left Eye (OS), Screen Right is user's Right Eye (OD).
+    const odScreenX = mirrored ? eye1X : eye2X;
+    const osScreenX = mirrored ? eye2X : eye1X;
+
+    // Determine deviating eye
+    let effectiveDeviatingEye: 'left' | 'right' = 'right';
+    if (this.params.deviatingEye === 'left') {
+      effectiveDeviatingEye = 'left';
+    } else if (this.params.deviatingEye === 'right') {
+      effectiveDeviatingEye = 'right';
+    } else if (this.params.deviatingEye === 'alternating') {
+      const phase = Math.floor(Date.now() / 3500) % 2;
+      effectiveDeviatingEye = phase === 0 ? 'right' : 'left';
+    }
+
+    const devRatio = this.currentDeviation / 100;
+    const reflexMm = devRatio * 4.0;
+    const pupilPixelRadius = Math.max(5, Math.min(16, bw * 0.04));
+    const glintShift = (reflexMm / 2.0) * pupilPixelRadius;
+
+    ctx.save();
+
+    // 1. Render Right Eye (OD) Glint
+    const isOdDeviating = effectiveDeviatingEye === 'right' && reflexMm > 0.05;
+    let odShiftX = 0;
+    let odShiftY = 0;
+
+    if (isOdDeviating) {
+      if (this.params.direction === 'esotropia') {
+        // Lác trong OD: Mắt xoay vào mũi (hướng về giữa).
+        // Phản xạ dời ra THÁI DƯƠNG (hướng ra ngoài biên)!
+        odShiftX = mirrored ? -glintShift : glintShift;
+      } else if (this.params.direction === 'exotropia') {
+        // Lác ngoài OD: Mắt xoay ra ngoài. Phản xạ dời vào MŨI (hướng về giữa)!
+        odShiftX = mirrored ? glintShift : -glintShift;
+      } else if (this.params.direction === 'hypertropia') {
+        odShiftY = glintShift;
+      } else {
+        odShiftY = -glintShift;
+      }
+    }
+
+    this.renderSingleCornealReflex(
+      ctx,
+      odScreenX,
+      eyeY,
+      odShiftX,
+      odShiftY,
+      isOdDeviating,
+      'OD',
+      reflexMm
+    );
+
+    // 2. Render Left Eye (OS) Glint
+    const isOsDeviating = effectiveDeviatingEye === 'left' && reflexMm > 0.05;
+    let osShiftX = 0;
+    let osShiftY = 0;
+
+    if (isOsDeviating) {
+      if (this.params.direction === 'esotropia') {
+        // Lác trong OS: Mắt xoay vào mũi (hướng về giữa).
+        // Phản xạ dời ra THÁI DƯƠNG (hướng ra ngoài biên)!
+        osShiftX = mirrored ? glintShift : -glintShift;
+      } else if (this.params.direction === 'exotropia') {
+        // Lác ngoài OS: Mắt xoay ra ngoài. Phản xạ dời vào MŨI (hướng về giữa)!
+        osShiftX = mirrored ? -glintShift : glintShift;
+      } else if (this.params.direction === 'hypertropia') {
+        osShiftY = glintShift;
+      } else {
+        osShiftY = -glintShift;
+      }
+    }
+
+    this.renderSingleCornealReflex(
+      ctx,
+      osScreenX,
+      eyeY,
+      osShiftX,
+      osShiftY,
+      isOsDeviating,
+      'OS',
+      reflexMm
+    );
+
+    ctx.restore();
+  }
+
+  private renderSingleCornealReflex(
+    ctx: CanvasRenderingContext2D,
+    pupilCenterX: number,
+    pupilCenterY: number,
+    shiftX: number,
+    shiftY: number,
+    isDeviating: boolean,
+    eyeTag: 'OD' | 'OS',
+    reflexMm: number
+  ) {
+    const glintX = pupilCenterX + shiftX;
+    const glintY = pupilCenterY + shiftY;
+
+    // Pupil crosshair
+    ctx.strokeStyle = isDeviating ? 'rgba(245, 158, 11, 0.45)' : 'rgba(0, 196, 180, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(pupilCenterX, pupilCenterY, 8, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // If deviating, draw displacement vector from pupil center
+    if (isDeviating && (Math.abs(shiftX) > 0.5 || Math.abs(shiftY) > 0.5)) {
+      ctx.strokeStyle = '#f43f5e';
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(pupilCenterX, pupilCenterY);
+      ctx.lineTo(glintX, glintY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Specular flare
+    const flareR = isDeviating ? 7 : 5;
+    const flareGrad = ctx.createRadialGradient(glintX, glintY, 1, glintX, glintY, flareR);
+    flareGrad.addColorStop(0, '#ffffff');
+    flareGrad.addColorStop(0.4, isDeviating ? 'rgba(251, 191, 36, 0.9)' : 'rgba(0, 240, 255, 0.9)');
+    flareGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+    ctx.fillStyle = flareGrad;
+    ctx.beginPath();
+    ctx.arc(glintX, glintY, flareR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Pinpoint core
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(glintX, glintY, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tiny tag badge
+    ctx.fillStyle = isDeviating ? 'rgba(245, 158, 11, 0.9)' : 'rgba(0, 196, 180, 0.9)';
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'center';
+    const tagText = isDeviating ? `${eyeTag}: +${reflexMm.toFixed(1)}mm` : `${eyeTag}: 0mm`;
+    ctx.fillText(tagText, pupilCenterX, pupilCenterY - 14);
   }
 }

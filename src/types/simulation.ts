@@ -29,6 +29,8 @@ export type StrabismusDirection = 'esotropia' | 'exotropia' | 'hypertropia' | 'h
 export type DeviatingEye = 'right' | 'left' | 'alternating';
 export type ImageSource = 'camera' | 'sample_scene';
 export type CoverState = 'none' | 'cover_left' | 'cover_right' | 'alternate_cover';
+export type EyeOcclusionMode = 'both' | 'left_covered' | 'right_covered';
+export type BrainResponseMode = 'diplopia' | 'suppression';
 
 export interface SimulationParameters {
   condition: ConditionId;
@@ -40,6 +42,14 @@ export interface SimulationParameters {
   fusion: number;             // 0 - 100% (motor & sensory fusional reserve)
   direction: StrabismusDirection;
   deviatingEye: DeviatingEye;
+  // First-person Binocular Vision & Brain Response Layer
+  eyeOcclusionMode: EyeOcclusionMode;
+  brainResponseMode?: BrainResponseMode;
+  // Visual Confusion (Nhầm lẫn thị giác theo nghiên cứu)
+  visualConfusionEnabled: boolean;
+  // Scientific Orthoptic Aids & Tests
+  showCrowdingTest: boolean;          // Hiện tượng đám đông / chen chúc (Crowding Phenomenon)
+  showSuppressionScotoma: boolean;    // Ám điểm ức chế cục bộ GABAergic V1
   // Cover test & orthoptic aids
   coverState: CoverState;
   redCyanDisparityAid: boolean;
@@ -78,9 +88,9 @@ export const CONDITIONS_REGISTRY: Record<ConditionId, ConditionInfo> = {
     name: 'Chính thị (Bình thường)',
     badge: 'Chuẩn',
     medicalTitle: '01. Thị giác Hai mắt Bình thường (Normal Binocular Single Vision)',
-    medicalDescription: 'Hai mắt cùng hướng chính xác vào tiêu điểm quan sát. Hình ảnh rơi đúng vào hoàng điểm (Fovea) của cả hai mắt, được vỏ não thị giác dung hợp hoàn hảo thành một hình ảnh duy nhất có cảm nhận chiều sâu lập thể sắc nét (Stereopsis).',
-    clinicalNote: 'Không có hiện tượng song thị hoặc ức chế. Biên độ dung hợp vận nhãn (Motor Fusion) và dung hợp cảm giác (Sensory Fusion) đạt 100%.',
-    pathophysiology: 'Tia sáng hội tụ đối xứng trên vùng Panum của võng mạc hai mắt, kích thích các tế bào thần kinh nhị nhãn ở vỏ não thùy chẩm V1/V2.',
+    medicalDescription: 'Hai mắt cùng hướng chính xác về điểm định thị. Hình ảnh rơi vào các điểm võng mạc tương ứng (vòng Horopter và vùng dung hợp Panum), kích hoạt 3 cấp độ tuần tự theo Claud Worth: Cảm nhận đồng thời (Simultaneous perception) ➔ Hợp thị cảm giác (Sensory fusion) ➔ Thị giác lập thể (Stereopsis tinh tế < 60 giây cung).',
+    clinicalNote: 'Không có hiện tượng song thị hoặc ức chế. Biên độ dung hợp vận nhãn (Motor Fusion) và dung hợp cảm giác (Sensory Fusion) đạt 100%. Nhận thức chiều sâu 3D sắc nét tuyệt đối.',
+    pathophysiology: 'Các nơ-ron hai mắt tại vỏ thị giác sơ cấp V1 (diện Brodmann 17) tích hợp tín hiệu qua các cột ưu thế thị giác, trích xuất độ chênh lệch võng mạc ngang (horizontal retinal disparity).',
     defaultParams: {
       deviation: 0,
       diplopiaOffset: 0,
@@ -89,20 +99,23 @@ export const CONDITIONS_REGISTRY: Record<ConditionId, ConditionInfo> = {
       blurAmount: 0,
       coverState: 'none',
       redCyanDisparityAid: false,
+      visualConfusionEnabled: false,
+      showCrowdingTest: false,
+      showSuppressionScotoma: false,
     },
   },
 
-  // ==================== STAGE 2: EARLY / INTERMITTENT (PHORIA) ====================
+  // ==================== STAGE 2: EARLY / INTERMITTENT (PHORIA / IXT) ====================
   early_strabismus: {
     id: 'early_strabismus',
     category: 'stages',
     stageNumber: '02',
-    name: 'Lệch nhẹ / Lác ẩn (Phoria)',
+    name: 'Lác ẩn / Luân phiên (Phoria / IXT)',
     badge: 'Dung hợp bù trừ',
-    medicalTitle: '02. Lệch nhẹ / Lác ẩn (Heterophoria / Intermittent Tropia)',
-    medicalDescription: 'Trục thị giác có xu hướng lệch nhẹ, NHƯNG não bộ và hệ cơ vận nhãn vẫn chủ động bù trừ (Fusional Vergence) để giữ ảnh trong vùng Panum. Do đó, người bệnh HOÀN TOÀN KHÔNG BỊ NHÌN ĐÔI (Ảnh đơn 100%).',
-    clinicalNote: 'Triệu chứng thực tế: Mỏi mắt (Asthenopia), căng tức cơ hốc mắt, vi rung điều tiết khi chuyển tiêu cự hoặc khi làm việc mệt mỏi, nhưng hình ảnh vẫn là ẢNH ĐƠN.',
-    pathophysiology: 'Hệ thống dung hợp vận nhãn liên tục kích hoạt cơ trực trong/ngoài để giữ ảnh trong vùng dung hợp Panum. Khi phá vỡ dung hợp (như che một mắt), độ lệch mới bộc lộ.',
+    medicalTitle: '02. Lác ẩn & Lác ngoài Luân phiên (Heterophoria / Intermittent Exotropia - IXT)',
+    medicalDescription: 'Trục thị giác có xu hướng trôi lệch, nhưng lực hợp thị vận nhãn (Fusional Vergence) bù trừ hoàn toàn giữ hai mắt thẳng hàng khi tỉnh táo và tập trung. Do đó, người bệnh HOÀN TOÀN KHÔNG BỊ NHÌN ĐÔI (Ảnh đơn 100%).',
+    clinicalNote: 'Triệu chứng thực tế: Mỏi mắt (Asthenopia), căng tức cơ hốc mắt khi làm việc kéo dài. Trong lác ngoài luân phiên (IXT), bệnh nhân có phản xạ nheo một mắt ngoài nắng (bright light squinting) để tránh quá tải võng mạc phá vỡ hợp thị; khi mệt mỏi sẽ trôi sang pha lác hiện (Tropic phase). Thang điểm Newcastle (NCS ≥ 4) đánh giá nguy cơ mất kiểm soát.',
+    pathophysiology: 'Quy luật Hering và Sherrington điều phối trương lực cơ vận nhãn bù trừ. Điểm phá vỡ hợp thị (Break point) xuất hiện khi dự trữ dung hợp suy kiệt.',
     defaultParams: {
       deviation: 20,
       diplopiaOffset: 0,       // QUAN TRỌNG: Lệch nhẹ KHÔNG CÓ song thị!
@@ -110,19 +123,22 @@ export const CONDITIONS_REGISTRY: Record<ConditionId, ConditionInfo> = {
       fusion: 85,
       blurAmount: 0,
       coverState: 'none',
+      visualConfusionEnabled: false,
+      showCrowdingTest: false,
+      showSuppressionScotoma: false,
     },
   },
 
-  // ==================== STAGE 3: CLEAR MISALIGNMENT (LỆCH RÕ) ====================
+  // ==================== STAGE 3: CLEAR MISALIGNMENT (DECOMPENSATED) ====================
   clear_strabismus: {
     id: 'clear_strabismus',
     category: 'stages',
     stageNumber: '03',
-    name: 'Lệch rõ (Clear Misalignment)',
+    name: 'Lệch rõ / Chớm mất bù (Decompensated)',
     badge: 'Chớm mất bù',
-    medicalTitle: '03. Lệch rõ Trục thị giác (Clear Ocular Misalignment)',
-    medicalDescription: 'Độ lệch nhãn cầu bắt đầu vượt quá vùng dung hợp Panum (Decompensation). Vỏ não chưa kịp thích nghi và biên độ dung hợp vận nhãn suy giảm. Hình ảnh bắt đầu trượt nhẹ sang một bên tạo viền bóng mờ chớm tách (~10-14px), người xem cảm nhận sự mất ổn định thị giác trước khi chuyển sang song thị hoàn toàn.',
-    clinicalNote: 'Hình ảnh khuôn mặt xuất hiện bóng mờ viền trượt nhẹ (~10-14px, độ mờ ~30%). Đây là giai đoạn chuyển tiếp quan trọng khi hệ cơ vận nhãn không còn giữ nổi ảnh đơn.',
+    medicalTitle: '03. Lệch rõ / Chớm Mất Bù Hợp Thị (Decompensated Strabismus)',
+    medicalDescription: 'Độ lệch nhãn cầu bắt đầu vượt quá biên độ dung sai của vùng dung hợp Panum (Decompensation). Vỏ não chưa kịp thích nghi và biên độ dung hợp vận nhãn suy giảm. Hình ảnh bắt đầu trượt tách nhẹ tạo viền bóng mờ (~10-14px, alpha ~32%), người xem cảm nhận sự mất ổn định thị giác trước khi chuyển sang song thị hoàn toàn.',
+    clinicalNote: 'Hình ảnh khuôn mặt xuất hiện bóng mờ viền trượt nhẹ (~10-14px, độ mờ ~32%). Đây là giai đoạn chuyển tiếp quan trọng khi hệ cơ vận nhãn không còn giữ nổi ảnh đơn, chữ trên trang sách chớm xô lệch.',
     pathophysiology: 'Ảnh võng mạc trượt ra ngoài vùng Panum nhưng não vẫn còn phản xạ cố gắng dung hợp yếu ớt.',
     defaultParams: {
       deviation: 35,
@@ -131,41 +147,47 @@ export const CONDITIONS_REGISTRY: Record<ConditionId, ConditionInfo> = {
       fusion: 40,
       blurAmount: 0,
       coverState: 'none',
+      visualConfusionEnabled: false,
+      showCrowdingTest: false,
+      showSuppressionScotoma: false,
     },
   },
 
-  // ==================== STAGE 4: TRUE DIPLOPIA (SONG THỊ HOÀN TOÀN) ====================
+  // ==================== STAGE 4: DIPLOPIA & VISUAL CONFUSION ====================
   diplopia: {
     id: 'diplopia',
     category: 'stages',
     stageNumber: '04',
-    name: 'Song thị hoàn toàn (Diplopia)',
-    badge: 'Nhìn đôi chuẩn lâm sàng',
-    medicalTitle: '04. Song thị Toàn phần (Full Manifest Diplopia)',
-    medicalDescription: 'Tính năng cốt lõi: Khả năng dung hợp sụp đổ hoàn toàn (Fusion = 0%) và chưa xảy ra ức chế vỏ não. Hình ảnh tách đôi song song với khoảng cách vừa phải chuẩn xác (~24-28px, hai khuôn mặt lồng ghép vào nhau với viền sống mũi, khóe mắt và đường nét rõ ràng theo đúng ảnh lâm sàng thực tế "chỉ lệch như này thôi", không bị tách quá xa hay méo mó).',
-    clinicalNote: 'Hình ảnh khuôn mặt, đôi mắt và môi trường xung quanh bị tách thành hai hình ảnh song song rõ nét với tỉ lệ cân bằng 50/50, khoảng cách lệch tự nhiên ~24-28px. Có thể kéo thanh trượt Song thị để tinh chỉnh độ lệch.',
-    pathophysiology: 'Sự tách biệt hoàn toàn giữa hai hướng thị giác chủ quan (Subjective Visual Directions) mà không có sự can thiệp dập tắt của vỏ não.',
+    name: 'Song thị & Nhầm lẫn thị giác',
+    badge: 'Rối loạn cảm giác kép',
+    medicalTitle: '04. Rối loạn Cảm giác Kép: Song thị & Nhầm lẫn Thị giác (Diplopia & Visual Confusion)',
+    medicalDescription: 'Đặc trưng cốt lõi của lác mắc phải ở người lớn: Hai hiện tượng cảm giác tách biệt xuất hiện đồng thời! (1) Song thị (Diplopia): Một vật thể thành hai hình ở hai vị trí không gian (đồng chiều trong Lác trong, bắt chéo trong Lác ngoài). (2) Nhầm lẫn thị giác (Visual Confusion): Hai vật thể khác nhau bị hai fovea tiếp nhận và chiếu chồng đè lên cùng một tọa độ trung tâm.',
+    clinicalNote: 'Gây suy giảm chất lượng cuộc sống chức năng nghiêm trọng (theo thang đo AS-20 và Diplopia Questionnaire): mất khả năng đọc sách liên tục, dễ bước hụt ngã cầu thang, mất định vị không gian, buộc phải nhắm hoặc bịt một mắt.',
+    pathophysiology: 'Mỗi vùng võng mạc có hướng thị giác chủ quan cố định. Fovea luôn chiếu thẳng trước mặt. Khi 2 fovea nhìn 2 vật khác nhau, chúng bị đè lên nhau (Confusion); khi 1 vật rơi vào 1 fovea và 1 điểm ngoại vi, nó bị chiếu ra 2 nơi (Diplopia).',
     defaultParams: {
       deviation: 65,
-      diplopiaOffset: 32,      // Chuẩn tỉ lệ lâm sàng thực tế "chỉ lệch như này thôi" (~24-28px)
+      diplopiaOffset: 32,      // Chuẩn tỉ lệ lâm sàng thực tế (~24-28px)
       suppression: 0,
       fusion: 0,
       blurAmount: 0,
       coverState: 'none',
+      visualConfusionEnabled: true,
+      showCrowdingTest: false,
+      showSuppressionScotoma: false,
     },
   },
 
-  // ==================== STAGE 5: CORTICAL SUPPRESSION (ADAPTATION) ====================
+  // ==================== STAGE 5: CORTICAL SUPPRESSION (GABAERGIC) ====================
   suppression: {
     id: 'suppression',
     category: 'stages',
     stageNumber: '05',
-    name: 'Não thích nghi (Ức chế vỏ não)',
+    name: 'Não thích nghi (Ức chế GABAergic)',
     badge: 'Triệt tiêu song thị',
-    medicalTitle: '05. Thích nghi Vỏ não Thị giác (Cortical Suppression)',
-    medicalDescription: 'Ở trẻ nhỏ có lác khởi phát sớm (dưới 8 tuổi), vỏ não mềm dẻo sẽ thích nghi bằng cách chủ động dập tắt tín hiệu từ hoàng điểm mắt lệch. Kết quả: SONG THỊ HOÀN TOÀN BIẾN MẤT, trẻ chỉ thấy một hình ảnh đơn từ mắt lành.',
-    clinicalNote: 'Song thị bị triệt tiêu, nhưng cái giá phải trả là mất hoàn toàn cảm nhận chiều sâu 3D (Stereopsis) và nguy cơ tiến triển thành nhược thị vĩnh viễn.',
-    pathophysiology: 'Các interneuron ức chế GABAergic ở vỏ não V1 ngăn chặn dòng tín hiệu thị giác từ mắt lệch truyền lên trung khu nhận thức thị giác cao cấp.',
+    medicalTitle: '05. Thích nghi Vỏ não ở Trẻ em: Ức chế Cục bộ (Cortical Suppression)',
+    medicalDescription: 'Ở trẻ nhỏ có lác khởi phát sớm (< 7-8 tuổi), tính mềm dẻo của vỏ não kích hoạt mạng nơ-ron trung gian giải phóng chất dẫn truyền GABA tại diện V1. Hình thành Ám điểm ức chế Fovea (triệt tiêu nhầm lẫn thị giác) và Ám điểm ức chế Ngoại vi (triệt tiêu song thị). Trẻ không còn thấy nhìn đôi.',
+    clinicalNote: 'BẰNG CHỨNG Y KHOA KHẲNG ĐỊNH: Não KHÔNG làm tối đen hay tắt hoàn toàn một mắt! Trường nhìn ngoại vi và xử lý chuyển động hai mắt (Motion Processing tại diện MT/V5) vẫn hoạt động đạt 31.2% - 100%. Ngay khi che mắt lành, ức chế biến mất tức thì, mắt lệch định thị lại ngay.',
+    pathophysiology: 'Các interneuron ức chế GABAergic ở vỏ não V1 ngăn chặn dòng tín hiệu thị giác từ mắt lệch truyền lên trung khu nhận thức thị giác cao cấp. Hậu quả: mất thị giác lập thể 3D tinh tế và nguy cơ nhược thị nếu lác một mắt kéo dài.',
     defaultParams: {
       deviation: 75,
       diplopiaOffset: 0,       // QUAN TRỌNG: Song thị biến mất vì não đã ức chế mắt lệch!
@@ -173,20 +195,23 @@ export const CONDITIONS_REGISTRY: Record<ConditionId, ConditionInfo> = {
       fusion: 0,
       blurAmount: 0,
       coverState: 'none',
+      visualConfusionEnabled: false,
+      showCrowdingTest: false,
+      showSuppressionScotoma: true,
     },
   },
 
-  // ==================== STAGE 6: STRABISMIC AMBLYOPIA ====================
+  // ==================== STAGE 6: STRABISMIC AMBLYOPIA & CROWDING ====================
   amblyopia: {
     id: 'amblyopia',
     category: 'stages',
     stageNumber: '06',
-    name: 'Nhược thị do Lác (Amblyopia)',
-    badge: 'Giảm thị lực',
-    medicalTitle: '06. Nhược thị Thần kinh do Lác (Strabismic Amblyopia)',
-    medicalDescription: 'Hậu quả lâu dài khi mắt lệch bị ức chế liên tục trong giai đoạn phát triển thị giác vàng. Ngay cả khi đeo kính đúng số và che mắt lành, mắt nhược thị vẫn bị suy giảm thị lực và giảm độ nhạy tương phản trầm trọng.',
-    clinicalNote: 'Mắt nhược thị nhìn mờ, giảm tương phản chi tiết cao và gặp hiện tượng đám đông (Crowding: chữ đứng một mình dễ đọc hơn chữ trong hàng).',
-    pathophysiology: 'Teo nhỏ các tế bào thần kinh ở thể gối ngoài (LGN) và vỏ não vận nhãn phụ trách tiếp nhận tín hiệu từ mắt nhược thị.',
+    name: 'Nhược thị & Hiện tượng Chen chúc',
+    badge: 'Tổn thương V1',
+    medicalTitle: '06. Nhược thị Thần kinh do Lác (Amblyopia) & Hiện tượng Chen chúc (Crowding)',
+    medicalDescription: 'Phát sinh khi lác một mắt liên tục kéo dài trong giai đoạn phát triển nhạy cảm (< 7-8 tuổi). Mờ nhòe không thể bù trừ hoàn toàn bằng kính do vùng não tiếp nhận V1 thoái hóa xi-náp, không phân giải được chi tiết; Giảm độ nhạy tương phản (nhạt màu, phẳng - flat); Hiện tượng chen chúc (Crowding Phenomenon): chữ đơn lẻ đọc được nhưng chữ trong hàng dài bị dính chùm, méo mó.',
+    clinicalNote: 'LÁC VÀ NHƯỢC THỊ LÀ 2 THỰC THỂ TÁCH BIỆT: Lác luân phiên tự do bảo tồn thị lực 20/20 ở cả hai mắt (không nhược thị). Nhược thị chỉ xảy ra khi lác cố định 1 mắt. Khác biệt khi nhìn 1 mắt và 2 mắt: Mở 2 mắt thì não bù trừ bằng mắt lành (người bệnh sinh hoạt bình thường và không nhận biết); Che mắt lành thì mắt nhược thị bộc lộ mờ đục, nhạt màu và rung nhẹ định vị bất ổn định.',
+    pathophysiology: 'Cạnh tranh xi-náp bất bình đẳng làm teo nhỏ tế bào thần kinh ở thể gối ngoài (LGN) và diện V1 phụ trách mắt lệch.',
     defaultParams: {
       deviation: 70,
       diplopiaOffset: 0,
@@ -194,6 +219,9 @@ export const CONDITIONS_REGISTRY: Record<ConditionId, ConditionInfo> = {
       fusion: 0,
       blurAmount: 4.5,
       coverState: 'none',
+      visualConfusionEnabled: false,
+      showCrowdingTest: true,
+      showSuppressionScotoma: false,
     },
   },
 

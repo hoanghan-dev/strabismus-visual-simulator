@@ -6,11 +6,12 @@ interface RemiCareLogoProps {
   showText?: boolean;
   textClassName?: string;
   subtextClassName?: string;
+  variant?: 'white' | 'transparent';
 }
 
 /**
  * RemiCare Official Brand Logo Component
- * Uses the official logo image from public/images/logo.jpg
+ * Uses the user's authentic brand image asset (PNG image, no SVG).
  */
 export const RemiCareLogo: React.FC<RemiCareLogoProps> = ({
   className = '',
@@ -18,31 +19,35 @@ export const RemiCareLogo: React.FC<RemiCareLogoProps> = ({
   showText = true,
   textClassName = '',
   subtextClassName = '',
+  variant = 'white',
 }) => {
+  const logoSrc = variant === 'transparent' ? '/remicare-logo-transparent.png' : '/remicare-logo.png';
+
   return (
     <div className={`flex items-center gap-2.5 select-none ${className}`}>
-      {/* Official Logo Image */}
+      {/* Authentic High-Resolution Logo Image Asset (No SVG) */}
       <img
-        src="/images/logo.jpg"
-        alt="RemiCare Logo"
+        src={logoSrc}
+        alt="RemiCare Brand Logo"
         width={size}
         height={size}
-        className="shrink-0 rounded-lg object-contain transition-transform duration-200 hover:scale-105"
-        style={{ width: size, height: size }}
+        style={{ width: `${size}px`, height: `${size}px` }}
+        className="shrink-0 object-contain rounded-xl shadow-sm transition-transform duration-200 hover:scale-105"
       />
 
       {/* Brand Text */}
       {showText && (
         <div className="flex flex-col">
           <div className={`flex items-baseline leading-none tracking-tight font-extrabold ${textClassName}`}>
-            <span className="text-[#006666]">Remi</span>
+            <span className="text-white">Remi</span>
             <span className="text-[#00c4b4] drop-shadow-sm">Care</span>
           </div>
           <span className={`text-[10px] font-medium tracking-wider text-slate-400 uppercase leading-none mt-0.5 ${subtextClassName}`}>
-            Visual Simulator
+            Ophthalmology & Binocular Vision
           </span>
         </div>
       )}
     </div>
   );
 };
+

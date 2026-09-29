@@ -13,8 +13,7 @@ import {
   VolumeX,
   BookOpen,
   Sparkles,
-  PanelRightClose,
-  PanelRightOpen,
+  Sliders,
   Sun,
   Moon,
 } from 'lucide-react';
@@ -25,6 +24,13 @@ import { RightSidebar } from './RightSidebar';
 import { MedicalModal } from './MedicalModal';
 import { medicalAudio, AudioScript } from '../services/medicalAudioService';
 import { RemiCareLogo } from './RemiCareLogo';
+
+// Story mode imports
+import { StoryChapterId, STORY_CHAPTERS } from '../types/story';
+import { StoryDialogueBox } from './StoryDialogueBox';
+import { StoryVisualProps } from './StoryVisualProps';
+import { StorySidebar } from './StorySidebar';
+import { StoryIntroModal } from './StoryIntroModal';
 
 interface ExperienceViewProps {
   onBackToLanding?: () => void;
@@ -39,8 +45,13 @@ const DEFAULT_PARAMS: SimulationParameters = {
   fusion: 100,
   direction: 'esotropia',
   deviatingEye: 'right',
+  eyeOcclusionMode: 'both',
+  brainResponseMode: undefined,
   coverState: 'none',
   redCyanDisparityAid: false,
+  visualConfusionEnabled: false,
+  showCrowdingTest: false,
+  showSuppressionScotoma: false,
   showHirschbergOverlay: false,
   showFaceBox: false,
   mirrored: true,
@@ -66,8 +77,47 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
   const [isMedicalModalOpen, setIsMedicalModalOpen] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [currentScript, setCurrentScript] = useState<AudioScript | null>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isDarkTheme, setIsDarkTheme] = useState(true);
+
+  // ==================== THEME SYSTEM (LIGHT / DARK) ====================
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('remicare_theme');
+      if (saved === 'light' || saved === 'dark') return saved;
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+        return 'light';
+      }
+    }
+    return 'dark';
+  });
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.setAttribute('data-theme', theme);
+      if (theme === 'light') {
+        document.documentElement.classList.add('light');
+        document.documentElement.classList.remove('dark');
+      } else {
+        document.documentElement.classList.add('dark');
+        document.documentElement.classList.remove('light');
+      }
+      localStorage.setItem('remicare_theme', theme);
+    }
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
+  // ==================== STORY JOURNEY STATES ====================
+  const [appMode, setAppMode] = useState<'story' | 'clinical'>('story');
+  const [storyChapterId, setStoryChapterId] = useState<StoryChapterId>('intro');
+  const [showIntroModal, setShowIntroModal] = useState<boolean>(true);
+  const [hasFinishedAudio, setHasFinishedAudio] = useState<boolean>(false);
+
+  const hasStoryBottomProp = appMode === 'story' && ['ch4', 'ch5', 'ch6', 'ending'].includes(storyChapterId);
+
+  // ==================== TOGGLE SIDEBAR STATE (DEFAULT CLOSED) ====================
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const cameraViewportRef = useRef<HTMLDivElement>(null);
@@ -109,9 +159,6 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
           const distDiff = Math.abs(last.dist - res.estimatedDistanceCm);
           const timeElapsed = now - last.time;
 
-          // Only trigger React state update if detection status flipped,
-          // or if distance shifted by at least 2cm AND at least 250ms have elapsed.
-          // This eliminates micro-fluctuations and continuous navbar re-rendering.
           if (detectedChanged || (distDiff >= 2 && timeElapsed >= 250)) {
             lastReportedFaceRef.current = {
               detected: res.detected,
@@ -227,7 +274,7 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
     }));
   };
 
-  // Select condition preset
+  // Select condition preset in Clinical Mode
   const handleSelectCondition = (conditionId: ConditionId) => {
     const config = CONDITIONS_REGISTRY[conditionId];
     if (!config) return;
@@ -248,7 +295,16 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
     const isMuted = medicalAudio.toggleMute();
     setParams((prev) => ({ ...prev, audioVoiceoverEnabled: !isMuted }));
     if (!isMuted) {
-      medicalAudio.speakScript(params.condition);
+      if (appMode === 'story') {
+        const chap = STORY_CHAPTERS[storyChapterId];
+        if (chap) {
+          medicalAudio.speakScript(chap.audioScriptId, () => {
+            setHasFinishedAudio(true);
+          });
+        }
+      } else {
+        medicalAudio.speakScript(params.condition);
+      }
     }
   };
 
@@ -282,20 +338,91 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
     }
   };
 
-  const activeConditionInfo = CONDITIONS_REGISTRY[params.condition] || CONDITIONS_REGISTRY.normal;
+  // ==================== STORYLINE CHAPTER ENGINE ====================
+  const handleSelectStoryChapter = (chapterId: StoryChapterId) => {
+    if (chapterId === 'intro') {
+      setShowIntroModal(true);
+      setStoryChapterId('intro');
+      return;
+    }
 
-  // Theme CSS variables
-  const themeClass = isDarkTheme
-    ? 'bg-[#05131a] text-slate-100'
-    : 'bg-slate-100 text-slate-900';
-  const headerClass = isDarkTheme
-    ? 'bg-[#061822] border-[#0e3546]'
-    : 'bg-white border-slate-200 shadow-sm';
+    setShowIntroModal(false);
+    setStoryChapterId(chapterId);
+  };
+
+  const handleNextStoryChapter = () => {
+    const currentChap = STORY_CHAPTERS[storyChapterId];
+    if (currentChap.nextChapterId) {
+      handleSelectStoryChapter(currentChap.nextChapterId);
+    } else if (currentChap.id === 'ending') {
+      handleSelectStoryChapter('ch1');
+    }
+  };
+
+  const handlePrevStoryChapter = () => {
+    const currentChap = STORY_CHAPTERS[storyChapterId];
+    if (currentChap.prevChapterId && currentChap.prevChapterId !== 'intro') {
+      handleSelectStoryChapter(currentChap.prevChapterId);
+    }
+  };
+
+  const handleReplayStoryAudio = () => {
+    const chap = STORY_CHAPTERS[storyChapterId];
+    if (!chap) return;
+    setHasFinishedAudio(false);
+    medicalAudio.speakScript(chap.audioScriptId, () => {
+      setHasFinishedAudio(true);
+    });
+  };
+
+  // Sync simulation parameters & trigger story audio automatically when chapter changes
+  useEffect(() => {
+    if (appMode !== 'story') return;
+
+    if (showIntroModal && storyChapterId === 'intro') {
+      setHasFinishedAudio(false);
+      medicalAudio.speakScript('story_intro', () => {
+        setHasFinishedAudio(true);
+      });
+      return;
+    }
+
+    if (storyChapterId === 'intro') return;
+
+    const chap = STORY_CHAPTERS[storyChapterId];
+    if (!chap) return;
+
+    // Apply simulation preset according to story chapter
+    const config = CONDITIONS_REGISTRY[chap.conditionId];
+    if (config) {
+      setParams((prev) => ({
+        ...prev,
+        imageSource: 'camera',
+        condition: chap.conditionId,
+        tab: config.category,
+        ...config.defaultParams,
+      }));
+    }
+
+    setHasFinishedAudio(false);
+    medicalAudio.speakScript(chap.audioScriptId, () => {
+      setHasFinishedAudio(true);
+    });
+
+    return () => {
+      medicalAudio.stop();
+    };
+  }, [storyChapterId, appMode, showIntroModal]);
+
+  const activeConditionInfo = CONDITIONS_REGISTRY[params.condition] || CONDITIONS_REGISTRY.normal;
+  const currentChapter = STORY_CHAPTERS[storyChapterId];
 
   return (
     <div
       ref={containerRef}
-      className={`w-full h-screen ${themeClass} flex flex-col overflow-hidden font-sans select-none transition-colors duration-300`}
+      data-theme={theme}
+      className={`w-full h-screen flex flex-col overflow-hidden font-sans select-none transition-colors duration-200 ${theme === 'light' ? 'bg-[#f1f6f9] text-slate-900' : 'bg-[#05131a] text-slate-100'
+        }`}
     >
       {/* Hidden Video Feed for Canvas Sampling */}
       <video
@@ -307,7 +434,7 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
       />
 
       {/* ==================== REMICARE TOP CLINICAL HEADER BAR ==================== */}
-      <header className={`h-16 shrink-0 ${headerClass} border-b px-3 sm:px-5 flex items-center justify-between gap-3 z-30 shadow-md transition-colors duration-300`}>
+      <header className="h-16 shrink-0 bg-[#061822] border-b border-[#0e3546] px-3 sm:px-5 flex items-center justify-between gap-3 z-30 shadow-md">
         {/* Left: Brand Logo & Navigation */}
         <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
           {onBackToLanding && (
@@ -326,71 +453,67 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
           {/* Vertical Divider */}
           <div className="hidden sm:block h-5 w-px bg-[#0e3546]" />
 
-          {/* Reset to Normal (Chính thị) Button */}
-          <button
-            onClick={handleResetToNormal}
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-teal-200 bg-[#0a2736] hover:bg-[#0f3448] border border-[#13445a] transition-colors cursor-pointer shadow-sm shrink-0"
-            title="Đặt lại thị giác về chính thị"
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-[#00c4b4]" />
-            <span>Chính thị</span>
-          </button>
+          {/* Mode Switcher Toggle: Story Adventure vs Clinical Lab */}
+          <div className="flex items-center p-0.5 bg-[#05131b] border border-[#0e3546] rounded-full shadow-inner">
+            <button
+              onClick={() => {
+                setAppMode('story');
+                if (storyChapterId === 'intro') {
+                  setShowIntroModal(true);
+                }
+              }}
+              className={`px-3 py-1 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${appMode === 'story'
+                ? 'bg-gradient-to-r from-[#00c4b4] to-[#00a896] text-slate-950 shadow-md font-extrabold'
+                : 'text-slate-400 hover:text-slate-200'
+                }`}
+            >
+              <span>📖 Cốt Truyện</span>
+            </button>
+            <button
+              onClick={() => {
+                setAppMode('clinical');
+                setShowIntroModal(false);
+              }}
+              className={`px-3 py-1 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${appMode === 'clinical'
+                ? 'bg-[#00a896] text-white shadow-md font-extrabold'
+                : 'text-slate-400 hover:text-slate-200'
+                }`}
+            >
+              <span>🔬 Bản Lâm Sàng</span>
+            </button>
+          </div>
         </div>
 
-        {/* Center: Active Condition Status Banner (Only on very wide screens, in normal flex flow with truncate to NEVER overlap) */}
+        {/* Center: Active Condition / Chapter Status Banner */}
         <div className="hidden 2xl:flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#0a202c] border border-[#11384b] min-w-0 max-w-xs shrink truncate select-none shadow-sm">
           <span className="w-2 h-2 rounded-full bg-[#00c4b4] animate-pulse shrink-0" />
           <span className="text-xs font-semibold text-slate-200 truncate">
-            {activeConditionInfo.name}
+            {appMode === 'story'
+              ? `${currentChapter.badge}: ${currentChapter.title}`
+              : activeConditionInfo.name}
           </span>
           <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[#00c4b4]/15 text-[#00c4b4] font-medium shrink-0">
-            {activeConditionInfo.badge}
+            {appMode === 'story' ? currentChapter.medicalCode : activeConditionInfo.badge}
           </span>
         </div>
 
         {/* Right: Audio Lecture, AAO Docs, Language & Status Badges */}
         <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
-          {/* Theme Toggle Button */}
-          <button
-            onClick={() => setIsDarkTheme((prev) => !prev)}
-            title={isDarkTheme ? 'Chuyển sang chế độ sáng' : 'Chuyển sang chế độ tối'}
-            className={`p-2 rounded-full border transition-colors cursor-pointer ${
-              isDarkTheme
-                ? 'bg-[#0a202c] border-[#11384b] text-amber-300 hover:bg-[#0e2a3a]'
-                : 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200'
-            }`}
-          >
-            {isDarkTheme ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-          </button>
-
-          {/* Sidebar Toggle Button */}
-          <button
-            onClick={() => setIsSidebarOpen((prev) => !prev)}
-            title={isSidebarOpen ? 'Ẩn bảng điều khiển' : 'Hiện bảng điều khiển'}
-            className={`p-2 rounded-full border transition-colors cursor-pointer ${
-              isDarkTheme
-                ? 'bg-[#0a202c] border-[#11384b] text-slate-300 hover:bg-[#0e2a3a]'
-                : 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200'
-            }`}
-          >
-            {isSidebarOpen ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
-          </button>
-          {/* Medical Audio Voiceover Toggle Button */}
+          {/* Audio Voiceover Toggle Button */}
           <button
             onClick={toggleAudioVoiceover}
             title={params.audioVoiceoverEnabled ? 'Tắt Thuyết Minh Giọng Nói' : 'Bật Thuyết Minh Giọng Nói'}
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold border shadow-md flex items-center gap-1.5 transition-colors cursor-pointer ${
-              params.audioVoiceoverEnabled
-                ? isSpeaking
-                  ? 'bg-teal-500/25 border-[#00c4b4] text-teal-100 ring-2 ring-[#00c4b4]/40 shadow-teal-500/20'
-                  : 'bg-[#00c4b4]/15 border-[#00c4b4]/50 text-teal-200 hover:bg-[#00c4b4]/25'
-                : 'bg-[#0a202c] border-[#11384b] text-slate-400 hover:text-slate-200'
-            }`}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold border shadow-md flex items-center gap-1.5 transition-colors cursor-pointer ${params.audioVoiceoverEnabled
+              ? isSpeaking
+                ? 'bg-teal-500/25 border-[#00c4b4] text-teal-100 ring-2 ring-[#00c4b4]/40 shadow-teal-500/20'
+                : 'bg-[#00c4b4]/15 border-[#00c4b4]/50 text-teal-200 hover:bg-[#00c4b4]/25'
+              : 'bg-[#0a202c] border-[#11384b] text-slate-400 hover:text-slate-200'
+              }`}
           >
             {params.audioVoiceoverEnabled ? (
               <>
                 <Volume2 className="w-3.5 h-3.5 text-[#00c4b4] shrink-0" />
-                <span className="hidden sm:inline">Giọng nói Y khoa</span>
+                <span className="hidden sm:inline">Giọng nói</span>
                 {isSpeaking && (
                   <span className="flex items-center gap-0.5 ml-0.5">
                     <span className="w-1 h-2.5 bg-[#00c4b4] rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
@@ -405,6 +528,16 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
                 <span className="hidden sm:inline">Âm thanh: Tắt</span>
               </>
             )}
+          </button>
+
+          {/* Reset to Normal (Chính thị) Button */}
+          <button
+            onClick={handleResetToNormal}
+            className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-semibold text-teal-200 bg-[#0a2736] hover:bg-[#0f3448] border border-[#13445a] transition-colors cursor-pointer shadow-sm shrink-0"
+            title="Đặt lại thị giác về chính thị"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-[#00c4b4]" />
+            <span>Chính thị</span>
           </button>
 
           {/* Medical AAO Reference Modal Trigger */}
@@ -423,30 +556,49 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
               <button
                 key={l}
                 onClick={() => setLang(l)}
-                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase transition-colors cursor-pointer ${
-                  lang === l
-                    ? 'bg-[#00a896] text-white shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
+                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase transition-colors cursor-pointer ${lang === l
+                  ? 'bg-[#00a896] text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+                  }`}
               >
                 {l}
               </button>
             ))}
           </div>
 
+          {/* Light / Dark Theme Switcher */}
+          <button
+            onClick={toggleTheme}
+            className={`px-2.5 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm border ${theme === 'light'
+              ? 'bg-amber-100 hover:bg-amber-200 text-amber-900 border-amber-300'
+              : 'bg-[#0a202c] hover:bg-[#0e2a3a] text-amber-300 border-[#11384b]'
+              }`}
+            title={theme === 'dark' ? 'Chuyển sang Giao diện Sáng (Light Theme)' : 'Chuyển sang Giao diện Tối (Dark Theme)'}
+          >
+            {theme === 'dark' ? (
+              <>
+                <Sun className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                <span className="hidden xl:inline text-[11px] text-amber-200 font-medium">Sáng</span>
+              </>
+            ) : (
+              <>
+                <Moon className="w-3.5 h-3.5 text-slate-700 shrink-0" />
+                <span className="hidden xl:inline text-[11px] text-slate-700 font-medium">Tối</span>
+              </>
+            )}
+          </button>
+
           {/* AI Face Detection Badge - STABLE WIDTH & TABULAR NUMS */}
           {params.imageSource === 'camera' && (
             <div
-              className={`hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold border min-w-[110px] justify-center transition-colors duration-200 ${
-                faceResult.detected
-                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
-                  : 'bg-amber-500/15 text-amber-300 border-amber-500/40'
-              }`}
+              className={`hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold border min-w-[110px] justify-center transition-colors duration-200 ${faceResult.detected
+                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                : 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                }`}
             >
               <span
-                className={`w-2 h-2 rounded-full shrink-0 ${
-                  faceResult.detected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
-                }`}
+                className={`w-2 h-2 rounded-full shrink-0 ${faceResult.detected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+                  }`}
               />
               <span className="font-mono tabular-nums whitespace-nowrap">
                 {faceResult.detected ? `Mặt: ${faceResult.estimatedDistanceCm}cm` : 'Tìm mặt...'}
@@ -458,6 +610,21 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
           <div className="bg-[#05131b] text-slate-400 font-mono text-[11px] px-2 py-1 rounded-lg border border-[#0e3546] shadow-inner w-[62px] text-center tabular-nums shrink-0">
             FPS: {fps}
           </div>
+
+          {/* ==================== TOGGLE SIDEBAR BUTTON (DEFAULT CLOSED) ==================== */}
+          <button
+            onClick={() => setIsSidebarOpen((prev) => !prev)}
+            className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer shadow-md ${isSidebarOpen
+              ? 'bg-[#00c4b4] text-slate-950 border-[#00c4b4] shadow-teal-500/20'
+              : 'bg-[#0a202c] border-[#11384b] text-teal-300 hover:text-white hover:bg-[#0f2e3d]'
+              }`}
+            title={isSidebarOpen ? 'Đóng bảng điều khiển bên phải' : 'Mở bảng điều khiển bên phải'}
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">
+              {isSidebarOpen ? 'Đóng Bảng' : appMode === 'story' ? 'Nhật Ký' : 'Bảng Điều Khiển'}
+            </span>
+          </button>
         </div>
       </header>
 
@@ -480,8 +647,16 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
             className="w-full h-full block object-cover select-none"
           />
 
-          {/* CLINICAL STATUS OVERLAY: CORTICAL SUPPRESSION ACTIVE (POSITIONED SAFELY) */}
-          {params.condition === 'suppression' && params.suppression >= 80 && (
+          {/* ==================== STORY MODE INTERACTIVE PROPS ==================== */}
+          {appMode === 'story' && !showIntroModal && (
+            <StoryVisualProps
+              chapterId={storyChapterId}
+              isSpeaking={isSpeaking}
+            />
+          )}
+
+          {/* CLINICAL STATUS OVERLAY: CORTICAL SUPPRESSION ACTIVE (POSITIONED SAFELY IN CLINICAL MODE) */}
+          {appMode === 'clinical' && params.condition === 'suppression' && params.suppression >= 80 && (
             <div className="absolute top-5 left-5 z-20 pointer-events-none animate-fade-in max-w-[90vw] md:max-w-sm">
               <div className="bg-[#081e2a]/95 border border-amber-500/60 px-4 py-2.5 rounded-2xl shadow-2xl backdrop-blur-md flex items-start gap-2.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse shrink-0 mt-1" />
@@ -501,8 +676,8 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
           )}
 
           {/* BOTTOM-LEFT: FLOATING DISTANCE CARD */}
-          <div className="absolute bottom-5 left-5 z-20 pointer-events-auto hidden md:block">
-            <div className="bg-[#071922]/90 backdrop-blur-md border border-[#0e3546] px-4 py-2.5 rounded-2xl shadow-xl space-y-0.5">
+          <div className="absolute bottom-4 left-4 z-20 pointer-events-auto hidden md:block">
+            <div className="bg-[#071922]/90 backdrop-blur-md border border-[#0e3546] px-3.5 py-2 rounded-2xl shadow-xl space-y-0.5">
               <div className="text-[10px] font-bold tracking-wider text-teal-400 uppercase">
                 KHOẢNG CÁCH NHẬN DIỆN
               </div>
@@ -515,83 +690,171 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
             </div>
           </div>
 
-          {/* SYNCHRONIZED MEDICAL NARRATION SUBTITLE CARD */}
-          {isSpeaking && currentScript && (
-            <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 pointer-events-auto max-w-[92vw] md:max-w-[580px] w-full animate-fade-in">
-              <div className="bg-[#061822]/95 border border-[#00c4b4]/60 p-4 rounded-3xl shadow-2xl backdrop-blur-md flex items-start gap-3">
-                <div className="p-2 rounded-2xl bg-[#00c4b4]/20 text-[#00c4b4] shrink-0 mt-0.5 animate-pulse">
-                  <Volume2 className="w-4 h-4" />
-                </div>
-                <div className="flex-1 min-w-0 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-bold text-teal-300 uppercase tracking-wider flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-[#00c4b4]" />
-                      <span>{currentScript.title}</span>
-                    </span>
-                    <button
-                      onClick={handleStopAudio}
-                      className="text-[10px] text-slate-400 hover:text-white bg-[#0a202c] hover:bg-[#0e2a3a] px-2.5 py-0.5 rounded-md cursor-pointer transition-colors border border-[#11384b]"
-                    >
-                      Dừng đọc
-                    </button>
-                  </div>
-                  <p className="text-xs text-slate-200 leading-relaxed font-medium">
-                    {currentScript.text}
-                  </p>
-                  <div className="text-[10px] text-amber-300 font-semibold pt-1 border-t border-[#0e3546]">
-                    💡 Điểm cốt lõi: {currentScript.keyTakeaway}
-                  </div>
+          {/* ==================== STORY MODE QUICK EYE-OCCLUSION HUD ==================== */}
+          {appMode === 'story' && !showIntroModal && (
+            <div
+              className={`absolute left-1/2 -translate-x-1/2 z-25 pointer-events-auto transition-all duration-300 max-w-[92vw] ${hasStoryBottomProp ? 'bottom-24 sm:bottom-25' : 'bottom-4'
+                }`}
+            >
+              <div className="bg-[#061822]/95 backdrop-blur-md border border-[#00c4b4]/60 p-1 rounded-2xl shadow-2xl flex items-center gap-1">
+                <button
+                  onClick={() => handleUpdateParameters({ eyeOcclusionMode: 'both' })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${params.eyeOcclusionMode === 'both'
+                    ? 'bg-gradient-to-r from-[#00a896] to-[#00897b] text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-[#0a202c]'
+                    }`}
+                  title="Cả hai mắt cùng mở (Mặc định)"
+                >
+                  <span>👀 Cả 2 mắt</span>
+                </button>
+
+                <button
+                  onClick={() => handleUpdateParameters({ eyeOcclusionMode: 'left_covered' })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${params.eyeOcclusionMode === 'left_covered'
+                    ? 'bg-gradient-to-r from-[#00a896] to-[#00897b] text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-[#0a202c]'
+                    }`}
+                  title="Che mắt trái — Chỉ nhận tín hiệu Mắt Phải"
+                >
+                  <span>👁️❌ Che trái</span>
+                </button>
+
+                <button
+                  onClick={() => handleUpdateParameters({ eyeOcclusionMode: 'right_covered' })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${params.eyeOcclusionMode === 'right_covered'
+                    ? 'bg-gradient-to-r from-[#00a896] to-[#00897b] text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-[#0a202c]'
+                    }`}
+                  title="Che mắt phải — Chỉ nhận tín hiệu Mắt Trái"
+                >
+                  <span>👁️❌ Che phải</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== STORY MODE DIALOGUE & GUIDANCE BOX (TOP-LEFT: FREELY RESIZABLE) ==================== */}
+          {appMode === 'story' && !showIntroModal && (
+            <div className="absolute top-3 left-3 sm:top-4 sm:left-4 z-25 pointer-events-none">
+              <StoryDialogueBox
+                currentChapter={STORY_CHAPTERS[storyChapterId]}
+                isSpeaking={isSpeaking}
+                hasFinishedAudio={hasFinishedAudio}
+                onNextChapter={handleNextStoryChapter}
+                onPrevChapter={storyChapterId !== 'ch1' ? handlePrevStoryChapter : undefined}
+                onReplayAudio={handleReplayStoryAudio}
+                onToggleMute={toggleAudioVoiceover}
+                isMuted={medicalAudio.getIsMuted()}
+                theme={theme}
+              />
+            </div>
+          )}
+
+          {/* ==================== CLINICAL MODE BOTTOM CONTROLS & TIMELINE ==================== */}
+          {appMode === 'clinical' && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 pointer-events-auto flex flex-col items-center gap-2 max-w-[95vw]">
+              {/* Row 1: Quick Eye-Occlusion Shortcut HUD */}
+              <div className="bg-[#061822]/95 backdrop-blur-md border border-[#0e3546] p-1 rounded-2xl shadow-2xl flex items-center gap-1">
+                <button
+                  onClick={() => handleUpdateParameters({ eyeOcclusionMode: 'both' })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${params.eyeOcclusionMode === 'both'
+                    ? 'bg-gradient-to-r from-[#00a896] to-[#00897b] text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-[#0a202c]'
+                    }`}
+                  title="Cả hai mắt cùng mở (Mặc định)"
+                >
+                  <span>👀 Cả 2 mắt</span>
+                </button>
+
+                <button
+                  onClick={() => handleUpdateParameters({ eyeOcclusionMode: 'left_covered' })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${params.eyeOcclusionMode === 'left_covered'
+                    ? 'bg-gradient-to-r from-[#00a896] to-[#00897b] text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-[#0a202c]'
+                    }`}
+                  title="Che mắt trái — Chỉ nhận tín hiệu Mắt Phải"
+                >
+                  <span>👁️❌ Che trái</span>
+                </button>
+
+                <button
+                  onClick={() => handleUpdateParameters({ eyeOcclusionMode: 'right_covered' })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${params.eyeOcclusionMode === 'right_covered'
+                    ? 'bg-gradient-to-r from-[#00a896] to-[#00897b] text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-[#0a202c]'
+                    }`}
+                  title="Che mắt phải — Chỉ nhận tín hiệu Mắt Trái"
+                >
+                  <span>👁️❌ Che phải</span>
+                </button>
+              </div>
+
+              {/* Row 2: Bottom Clinical Stage Timeline */}
+              <div className="max-w-[92vw] overflow-x-auto no-scrollbar">
+                <div className="flex items-center gap-1 bg-[#061822]/95 backdrop-blur-md border border-[#0e3546] p-1.5 rounded-2xl shadow-2xl">
+                  {(
+                    [
+                      { id: 'normal', num: '01', label: 'Bình thường' },
+                      { id: 'early_strabismus', num: '02', label: 'Lệch nhẹ' },
+                      { id: 'clear_strabismus', num: '03', label: 'Lệch rõ' },
+                      { id: 'diplopia', num: '04', label: 'Song thị' },
+                      { id: 'suppression', num: '05', label: 'Não thích nghi' },
+                      { id: 'amblyopia', num: '06', label: 'Nhược thị' },
+                    ] as const
+                  ).map((st) => {
+                    const isActive = params.condition === st.id;
+                    return (
+                      <button
+                        key={st.id}
+                        onClick={() => handleSelectCondition(st.id)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap cursor-pointer ${isActive
+                          ? 'bg-gradient-to-r from-[#00a896] to-[#00897b] text-white shadow-md shadow-teal-950/60 ring-1 ring-[#00c4b4]'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-[#0a202c]'
+                          }`}
+                      >
+                        <span
+                          className={`font-mono text-[10px] px-1 rounded ${isActive ? 'bg-teal-900 text-teal-100' : 'bg-[#05131b] text-teal-400/80 border border-[#0e3546]'
+                            }`}
+                        >
+                          {st.num}
+                        </span>
+                        <span>{st.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </div>
           )}
 
-          {/* BOTTOM-CENTER: INTERACTIVE STAGE TIMELINE (01 -> 02 -> 03 -> 04 -> 05) */}
-          <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-20 pointer-events-auto max-w-[92vw] overflow-x-auto no-scrollbar">
-            <div className="flex items-center gap-1 bg-[#061822]/95 backdrop-blur-md border border-[#0e3546] p-1.5 rounded-2xl shadow-2xl">
-              {(
-                [
-                  { id: 'normal', num: '01', label: 'Bình thường' },
-                  { id: 'early_strabismus', num: '02', label: 'Lệch nhẹ' },
-                  { id: 'clear_strabismus', num: '03', label: 'Lệch rõ' },
-                  { id: 'diplopia', num: '04', label: 'Song thị' },
-                  { id: 'suppression', num: '05', label: 'Não thích nghi' },
-                ] as const
-              ).map((st) => {
-                const isActive = params.condition === st.id;
-                return (
-                  <button
-                    key={st.id}
-                    onClick={() => handleSelectCondition(st.id)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap cursor-pointer ${
-                      isActive
-                        ? 'bg-gradient-to-r from-[#00a896] to-[#00897b] text-white shadow-md shadow-teal-950/60 ring-1 ring-[#00c4b4]'
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-[#0a202c]'
-                    }`}
-                  >
-                    <span
-                      className={`font-mono text-[10px] px-1 rounded ${
-                        isActive ? 'bg-teal-900 text-teal-100' : 'bg-[#05131b] text-teal-400/80 border border-[#0e3546]'
-                      }`}
-                    >
-                      {st.num}
-                    </span>
-                    <span>{st.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          {/* FLOATING QUICK OPEN TAB FOR SIDEBAR (WHEN SIDEBAR IS CLOSED) */}
+          {!isSidebarOpen && (
+            <button
+              onClick={() => setIsSidebarOpen(true)}
+              className={`absolute top-16 right-0 z-20 border-y border-l-2 border-r-0 pl-2.5 pr-3 py-2 rounded-l-2xl shadow-2xl backdrop-blur-md text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer group animate-fade-in ${
+                theme === 'light'
+                  ? 'bg-white/95 border-[#00a896] text-teal-800 hover:bg-teal-50 shadow-slate-300/40'
+                  : 'bg-[#071922]/95 border-[#00c4b4] text-teal-300 hover:text-white hover:bg-[#0c2f42]'
+              }`}
+              title="Mở Bảng Điều Khiển / Nhật Ký"
+            >
+              <ChevronLeft className={`w-4 h-4 group-hover:-translate-x-0.5 transition-transform ${
+                theme === 'light' ? 'text-teal-600' : 'text-teal-400'
+              }`} />
+              <span className="font-mono text-[11px]">
+                {appMode === 'story' ? '📖 Nhật Ký' : '🔬 Cài Đặt'}
+              </span>
+            </button>
+          )}
 
           {/* BOTTOM-RIGHT: FLOATING QUICK CONTROLS OVER CAMERA */}
-          <div className="absolute bottom-5 right-5 z-20 flex items-center gap-1.5 pointer-events-auto bg-[#071922]/90 backdrop-blur-md p-1.5 rounded-2xl border border-[#0e3546] shadow-xl">
+          <div className="absolute bottom-4 right-4 z-20 flex items-center gap-1.5 pointer-events-auto bg-[#071922]/90 backdrop-blur-md p-1.5 rounded-2xl border border-[#0e3546] shadow-xl">
             {/* Mirror Flip */}
             <button
               onClick={() => handleUpdateParameters({ mirrored: !params.mirrored })}
               title={params.mirrored ? 'Gương hình ảnh: BẬT' : 'Gương hình ảnh: TẮT'}
-              className={`p-2 rounded-xl text-xs transition-colors cursor-pointer ${
-                params.mirrored ? 'bg-[#00c4b4]/25 text-[#00c4b4]' : 'text-slate-400 hover:text-slate-200 hover:bg-[#0a202c]'
-              }`}
+              className={`p-2 rounded-xl text-xs transition-colors cursor-pointer ${params.mirrored ? 'bg-[#00c4b4]/25 text-[#00c4b4]' : 'text-slate-400 hover:text-slate-200 hover:bg-[#0a202c]'
+                }`}
             >
               <FlipHorizontal className="w-4 h-4" />
             </button>
@@ -600,9 +863,8 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
             <button
               onClick={() => handleUpdateParameters({ showFaceBox: !params.showFaceBox })}
               title="Bật/Tắt khung AI nhận diện khuôn mặt"
-              className={`p-2 rounded-xl text-xs transition-colors cursor-pointer ${
-                params.showFaceBox ? 'bg-[#00c4b4]/25 text-[#00c4b4]' : 'text-slate-400 hover:text-slate-200 hover:bg-[#0a202c]'
-              }`}
+              className={`p-2 rounded-xl text-xs transition-colors cursor-pointer ${params.showFaceBox ? 'bg-[#00c4b4]/25 text-[#00c4b4]' : 'text-slate-400 hover:text-slate-200 hover:bg-[#0a202c]'
+                }`}
             >
               <Scan className="w-4 h-4" />
             </button>
@@ -638,7 +900,7 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
 
           {/* Camera Permission Gate / Fallback Alert Banner */}
           {cameraState === 'denied' && (
-            <div className="absolute inset-x-6 bottom-20 z-30 flex items-center justify-between p-3.5 bg-[#061822]/95 border border-amber-500/40 rounded-2xl backdrop-blur-md shadow-2xl">
+            <div className="absolute inset-x-6 bottom-24 z-30 flex items-center justify-between p-3.5 bg-[#061822]/95 border border-amber-500/40 rounded-2xl backdrop-blur-md shadow-2xl">
               <div className="flex items-center gap-2.5 text-xs text-amber-200">
                 <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
                 <span>
@@ -655,36 +917,48 @@ export const ExperienceView: React.FC<ExperienceViewProps> = ({ onBackToLanding 
           )}
         </main>
 
-        {/* RIGHT SIDEBAR: TABS, CONDITIONS, MEDICAL INFO, AND SETTINGS */}
-        <div
-          className={`transition-all duration-300 ease-in-out overflow-hidden ${
-            isSidebarOpen ? 'w-full lg:w-[400px] xl:w-[440px]' : 'w-0'
-          } shrink-0`}
-        >
-          {isSidebarOpen && (
-            <RightSidebar
-              parameters={params}
-              onUpdateParameters={handleUpdateParameters}
-              onSelectCondition={handleSelectCondition}
-              onResetToNormal={handleResetToNormal}
-              onOpenMedicalModal={() => setIsMedicalModalOpen(true)}
-              lang={lang}
-              isDarkTheme={isDarkTheme}
-            />
-          )}
-        </div>
-
-        {/* Floating Sidebar Toggle Button (inside viewport when sidebar is closed) */}
-        {!isSidebarOpen && (
-          <button
-            onClick={() => setIsSidebarOpen(true)}
-            title="Hiện bảng điều khiển"
-            className="absolute top-4 right-4 z-30 p-2.5 rounded-xl bg-[#071922]/90 backdrop-blur-md border border-[#0e3546] text-slate-300 hover:text-white hover:bg-[#0e2a3a] transition-colors cursor-pointer shadow-xl"
-          >
-            <PanelRightOpen className="w-5 h-5" />
-          </button>
+        {/* RIGHT SIDEBAR: DEFAULT CLOSED (TOGGLEABLE) */}
+        {isSidebarOpen && (
+          <div className="relative h-full flex flex-col z-30 animate-fade-in shrink-0">
+            {appMode === 'story' ? (
+              <StorySidebar
+                currentChapterId={storyChapterId}
+                onSelectChapter={handleSelectStoryChapter}
+                onSwitchToClinicalMode={() => setAppMode('clinical')}
+                parameters={params}
+                onUpdateParameters={handleUpdateParameters}
+                onCloseSidebar={() => setIsSidebarOpen(false)}
+                theme={theme}
+              />
+            ) : (
+              <RightSidebar
+                parameters={params}
+                onUpdateParameters={handleUpdateParameters}
+                onSelectCondition={handleSelectCondition}
+                onResetToNormal={handleResetToNormal}
+                onOpenMedicalModal={() => setIsMedicalModalOpen(true)}
+                onSwitchToStoryMode={() => setAppMode('story')}
+                lang={lang}
+                onCloseSidebar={() => setIsSidebarOpen(false)}
+              />
+            )}
+          </div>
         )}
       </div>
+
+      {/* STORY INTRO MODAL */}
+      <StoryIntroModal
+        isOpen={showIntroModal && appMode === 'story'}
+        onStartAdventure={() => {
+          setShowIntroModal(false);
+          setStoryChapterId('ch1');
+        }}
+        onSkipToClinical={() => {
+          setShowIntroModal(false);
+          setAppMode('clinical');
+        }}
+        theme={theme}
+      />
 
       {/* MEDICAL DETAILS & CLINICAL CITATIONS MODAL */}
       <MedicalModal
