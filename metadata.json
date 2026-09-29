@@ -1,0 +1,6 @@
+{
+  "name": "Strabismus Visual Simulator",
+  "description": "An interactive educational real-time webcam visual experience demonstrating binocular vision alignment, diplopia (double vision), and visual suppression.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

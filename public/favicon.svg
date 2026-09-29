@@ -1,0 +1,20 @@
+<svg width="64" height="64" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="rc-teal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stopColor="#00c4b4" />
+      <stop offset="100%" stopColor="#009688" />
+    </linearGradient>
+    <linearGradient id="rc-navy" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stopColor="#0d4c5c" />
+      <stop offset="100%" stopColor="#072d38" />
+    </linearGradient>
+  </defs>
+  <rect width="400" height="400" rx="80" fill="#061a23" />
+  <circle cx="125" cy="115" r="55" fill="url(#rc-teal)" />
+  <path d="M72 115 C 88 92, 162 92, 178 115 C 162 138, 88 138, 72 115 Z" fill="#ffffff" />
+  <circle cx="125" cy="115" r="26" fill="#009e90" />
+  <path d="M 120 101 H 130 V 110 H 139 V 120 H 130 V 129 H 120 V 120 H 111 V 110 H 120 Z" fill="#ffffff" />
+  <path d="M 180 62 H 326 C 336 62, 342 70, 338 79 L 255 174 C 252 178, 246 180, 241 180 H 150 V 324 C 150 332, 143 338, 135 338 H 88 C 80 338, 73 331, 73 323 V 214 C 73 206, 80 199, 88 199 H 130 V 224 H 98 V 313 H 125 V 180 H 175 Z" fill="url(#rc-navy)" />
+  <path d="M 193 200 H 258 C 264 200, 270 203, 274 208 L 340 292 C 343 296, 343 302, 339 306 L 318 332 C 314 336, 308 337, 303 333 L 242 284 H 220 V 328 C 220 334, 215 338, 209 338 H 193 Z" fill="url(#rc-teal)" />
+  <path d="M 230 224 H 254 L 314 300 L 302 314 L 230 258 Z" fill="#061a23" />
+</svg>
